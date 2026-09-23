@@ -1,0 +1,1 @@
+Local preview\n\nOpen index.html in a browser, or serve the folder with a local static server.\n\nSource package: DMYK_TourGuide_v18\n
