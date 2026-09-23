@@ -1,0 +1,33 @@
+name: Apply Language_BG asset update
+
+on:
+  push:
+    paths:
+      - ".staging_bg/ready"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rebuild and verify asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .staging_bg/part* | tr -d '\n' | base64 -d > /tmp/Language_BG.svg
+          echo "441ba035022cdc0855e50a4056a8a7265deb642e02af020d5ee93e7f1ee16862  /tmp/Language_BG.svg" | sha256sum -c -
+          cp /tmp/Language_BG.svg assets/Language_BG.svg
+          rm -rf .staging_bg
+          rm -f .github/workflows/apply-language-bg.yml
+      - name: Commit asset update
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Update Language_BG asset"
+          git push
