@@ -1,1 +1,10 @@
-Local preview\n\nOpen index.html in a browser, or serve the folder with a local static server.\n\nSource package: DMYK_TourGuide_v18\n
+DMYK TourGuide v18
+
+Run locally from this folder:
+  python3 -m http.server 8080
+
+Then open:
+  http://localhost:8080
+
+Master layout width: 390px
+Language header width at the 390px master: 240px
