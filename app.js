@@ -48,7 +48,20 @@ const shareBtn = document.getElementById('shareBtn');
 const languageBtn = document.getElementById('languageBtn');
 const closeBtn = document.getElementById('closeBtn');
 const sideBtn = document.getElementById('sideBtn');
+const locateBtn = document.getElementById('locateBtn');
+const locateLabel = document.getElementById('locateLabel');
+const locationBeacon = document.getElementById('locationBeacon');
+const locationStatus = document.getElementById('locationStatus');
+
 let currentLang = 'zh';
+let locationWatchId = null;
+let lastCenteredPosition = null;
+let lastRecenterAt = 0;
+let locationStatusTimer = null;
+
+const LOCATION_ZOOM = 18;
+const RECENTER_DISTANCE_METERS = 25;
+const RECENTER_MIN_INTERVAL_MS = 7000;
 
 function applyOverlayCopy(lang) {
   const c = COPY[lang] || COPY.en;
@@ -59,6 +72,7 @@ function applyOverlayCopy(lang) {
 }
 
 function openMap(lang) {
+  stopLocationTracking();
   currentLang = lang;
   applyOverlayCopy(lang);
   mapFrame.src = MAPS[lang];
@@ -69,6 +83,7 @@ function openMap(lang) {
 }
 
 function showLanguagePage() {
+  stopLocationTracking();
   closeOverlay();
   mapFrame.src = '';
   mapScreen.classList.add('is-hidden');
@@ -85,6 +100,124 @@ function closeOverlay() {
   overlay.setAttribute('aria-hidden','true');
 }
 
+function showLocationStatus(message, duration = 2200) {
+  clearTimeout(locationStatusTimer);
+  locationStatus.textContent = message;
+  locationStatus.classList.add('is-visible');
+  if (duration > 0) {
+    locationStatusTimer = setTimeout(() => {
+      locationStatus.classList.remove('is-visible');
+    }, duration);
+  }
+}
+
+function setLocateActive(active) {
+  locateBtn.classList.toggle('is-active', active);
+  locateBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  locateLabel.textContent = active ? '停止定位 / Stop' : '我的位置 / Locate Me';
+  locationBeacon.classList.toggle('is-visible', active);
+}
+
+function distanceMeters(a, b) {
+  if (!a || !b) return Infinity;
+  const R = 6371000;
+  const toRad = value => value * Math.PI / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const h = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+function centeredMapUrl(lat, lng) {
+  const url = new URL(MAPS[currentLang]);
+  url.searchParams.set('ll', `${lat.toFixed(6)},${lng.toFixed(6)}`);
+  url.searchParams.set('z', String(LOCATION_ZOOM));
+  return url.toString();
+}
+
+function recenterMap(lat, lng) {
+  mapFrame.src = centeredMapUrl(lat, lng);
+  lastCenteredPosition = {lat, lng};
+  lastRecenterAt = Date.now();
+}
+
+function handleLocation(position, forceRecenter = false) {
+  const {latitude: lat, longitude: lng, accuracy} = position.coords;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+  setLocateActive(true);
+
+  const moved = distanceMeters(lastCenteredPosition, {lat, lng});
+  const intervalElapsed = Date.now() - lastRecenterAt >= RECENTER_MIN_INTERVAL_MS;
+  if (forceRecenter || (moved >= RECENTER_DISTANCE_METERS && intervalElapsed)) {
+    recenterMap(lat, lng);
+  }
+
+  const accuracyText = Number.isFinite(accuracy) ? ` · ±${Math.round(accuracy)}m` : '';
+  showLocationStatus(`定位中 / Located${accuracyText}`);
+}
+
+function handleLocationError(error) {
+  if (error && error.code === 1) {
+    showLocationStatus('未允許位置權限 / Location permission denied', 3600);
+    stopLocationTracking();
+    return;
+  }
+  if (error && error.code === 2) {
+    showLocationStatus('目前無法取得位置 / Location unavailable', 3200);
+    return;
+  }
+  if (error && error.code === 3) {
+    showLocationStatus('定位逾時，持續嘗試中 / Location timed out', 3200);
+    return;
+  }
+  showLocationStatus('無法取得位置 / Unable to locate', 3200);
+}
+
+function startLocationTracking() {
+  if (!navigator.geolocation) {
+    showLocationStatus('此瀏覽器不支援定位 / Geolocation unavailable', 3600);
+    return;
+  }
+
+  locateBtn.classList.add('is-loading');
+  locateLabel.textContent = '定位中 / Locating…';
+
+  navigator.geolocation.getCurrentPosition(
+    position => {
+      locateBtn.classList.remove('is-loading');
+      handleLocation(position, true);
+
+      if (locationWatchId === null) {
+        locationWatchId = navigator.geolocation.watchPosition(
+          position => handleLocation(position, false),
+          handleLocationError,
+          {enableHighAccuracy:true, maximumAge:4000, timeout:12000}
+        );
+      }
+    },
+    error => {
+      locateBtn.classList.remove('is-loading');
+      locateLabel.textContent = '我的位置 / Locate Me';
+      handleLocationError(error);
+    },
+    {enableHighAccuracy:true, maximumAge:0, timeout:12000}
+  );
+}
+
+function stopLocationTracking() {
+  if (locationWatchId !== null && navigator.geolocation) {
+    navigator.geolocation.clearWatch(locationWatchId);
+  }
+  locationWatchId = null;
+  lastCenteredPosition = null;
+  lastRecenterAt = 0;
+  locateBtn.classList.remove('is-loading');
+  setLocateActive(false);
+}
 
 const MASTER_WIDTH = 390;
 const PHONE_BREAKPOINT = 600;
@@ -116,6 +249,14 @@ document.querySelectorAll('.lang-btn').forEach(btn => {
 sideBtn.addEventListener('click', openOverlay);
 closeBtn.addEventListener('click', closeOverlay);
 languageBtn.addEventListener('click', showLanguagePage);
+locateBtn.addEventListener('click', () => {
+  if (locationWatchId !== null || locateBtn.classList.contains('is-active')) {
+    stopLocationTracking();
+    showLocationStatus('已停止定位 / Location stopped');
+  } else {
+    startLocationTracking();
+  }
+});
 overlay.addEventListener('click', e => { if (e.target === overlay) closeOverlay(); });
 
 shareBtn.addEventListener('click', async () => {
