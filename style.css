@@ -20,6 +20,7 @@ body{overflow-x:hidden;overflow-y:auto;-webkit-overflow-scrolling:touch}
 .lang-btn img{display:block;width:100%;height:100%}.lang-btn:active{transform:scale(.95);filter:brightness(.92)}
 .lang-cn{left:143.76px;top:0}.lang-jp{left:85.5px;top:99px}.lang-en{left:202px;top:99px}.lang-kr{left:143.76px;top:198px}.lang-th{left:85.5px;top:297px}.lang-vi{left:202px;top:297px}.lang-id{left:143.76px;top:396px}
 .map-screen iframe{display:block;width:100%;height:100%;border:0;background:#eee}
+.map-screen.is-following iframe{pointer-events:none;touch-action:none}
 
 .location-beacon{position:absolute;z-index:7;left:50%;top:50%;width:34px;height:34px;transform:translate(-50%,-50%);pointer-events:none;opacity:0;visibility:hidden;transition:opacity .2s ease}
 .location-beacon.is-visible{opacity:1;visibility:visible}
