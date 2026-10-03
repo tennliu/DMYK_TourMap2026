@@ -58,6 +58,8 @@ let locationWatchId = null;
 let lastCenteredPosition = null;
 let lastRecenterAt = 0;
 let locationStatusTimer = null;
+let savedBeacon = null;
+let locateState = 'idle';
 
 const LOCATION_ZOOM = 18;
 const RECENTER_DISTANCE_METERS = 25;
@@ -72,7 +74,7 @@ function applyOverlayCopy(lang) {
 }
 
 function openMap(lang) {
-  stopLocationTracking();
+  resetLocationAnchor();
   currentLang = lang;
   applyOverlayCopy(lang);
   mapFrame.src = MAPS[lang];
@@ -83,7 +85,7 @@ function openMap(lang) {
 }
 
 function showLanguagePage() {
-  stopLocationTracking();
+  resetLocationAnchor();
   closeOverlay();
   mapFrame.src = '';
   mapScreen.classList.add('is-hidden');
@@ -111,10 +113,20 @@ function showLocationStatus(message, duration = 2200) {
   }
 }
 
-function setLocateActive(active) {
+function setLocateState(state) {
+  locateState = state;
+  const active = state === 'active';
+  const anchored = state === 'anchored';
+
   locateBtn.classList.toggle('is-active', active);
+  locateBtn.classList.toggle('has-anchor', anchored);
   locateBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
-  locateLabel.textContent = active ? '瀏覽地圖 / Browse Map' : '我的位置 / Locate Me';
+  locateLabel.textContent = active
+    ? '瀏覽地圖 / Browse Map'
+    : anchored
+      ? '回到定位點 / Return to Beacon'
+      : '我的位置 / Locate Me';
+
   locationBeacon.classList.toggle('is-visible', active);
   mapScreen.classList.toggle('is-following', active);
 }
@@ -145,26 +157,22 @@ function recenterMap(lat, lng) {
   lastRecenterAt = Date.now();
 }
 
-function handleLocation(position, forceRecenter = false) {
+function handleLocation(position) {
   const {latitude: lat, longitude: lng, accuracy} = position.coords;
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
 
-  setLocateActive(true);
-
-  const moved = distanceMeters(lastCenteredPosition, {lat, lng});
-  const intervalElapsed = Date.now() - lastRecenterAt >= RECENTER_MIN_INTERVAL_MS;
-  if (forceRecenter || (moved >= RECENTER_DISTANCE_METERS && intervalElapsed)) {
-    recenterMap(lat, lng);
-  }
+  savedBeacon = {lat, lng, accuracy};
+  recenterMap(lat, lng);
+  setLocateState('active');
 
   const accuracyText = Number.isFinite(accuracy) ? ` · ±${Math.round(accuracy)}m` : '';
-  showLocationStatus(`定位模式 · 地圖已鎖定 / Follow mode · map locked${accuracyText}`, 2600);
+  showLocationStatus(`定位點已建立 / Beacon anchored${accuracyText}`, 2600);
 }
 
 function handleLocationError(error) {
   if (error && error.code === 1) {
     showLocationStatus('未允許位置權限 / Location permission denied', 3600);
-    stopLocationTracking();
+    resetLocationAnchor();
     return;
   }
   if (error && error.code === 2) {
@@ -190,26 +198,18 @@ function startLocationTracking() {
   navigator.geolocation.getCurrentPosition(
     position => {
       locateBtn.classList.remove('is-loading');
-      handleLocation(position, true);
-
-      if (locationWatchId === null) {
-        locationWatchId = navigator.geolocation.watchPosition(
-          position => handleLocation(position, false),
-          handleLocationError,
-          {enableHighAccuracy:true, maximumAge:4000, timeout:12000}
-        );
-      }
+      handleLocation(position);
     },
     error => {
       locateBtn.classList.remove('is-loading');
-      locateLabel.textContent = '我的位置 / Locate Me';
+      setLocateState(savedBeacon ? 'anchored' : 'idle');
       handleLocationError(error);
     },
     {enableHighAccuracy:true, maximumAge:0, timeout:12000}
   );
 }
 
-function stopLocationTracking() {
+function clearLocationWatch() {
   if (locationWatchId !== null && navigator.geolocation) {
     navigator.geolocation.clearWatch(locationWatchId);
   }
@@ -217,7 +217,28 @@ function stopLocationTracking() {
   lastCenteredPosition = null;
   lastRecenterAt = 0;
   locateBtn.classList.remove('is-loading');
-  setLocateActive(false);
+}
+
+function enterBrowseMode() {
+  clearLocationWatch();
+  setLocateState(savedBeacon ? 'anchored' : 'idle');
+  showLocationStatus('瀏覽模式 · 定位點已保存 / Browse mode · beacon saved', 2600);
+}
+
+function returnToBeacon() {
+  if (!savedBeacon) {
+    startLocationTracking();
+    return;
+  }
+  recenterMap(savedBeacon.lat, savedBeacon.lng);
+  setLocateState('active');
+  showLocationStatus('已回到定位點 / Returned to beacon', 2200);
+}
+
+function resetLocationAnchor() {
+  clearLocationWatch();
+  savedBeacon = null;
+  setLocateState('idle');
 }
 
 const MASTER_WIDTH = 390;
@@ -251,9 +272,10 @@ sideBtn.addEventListener('click', openOverlay);
 closeBtn.addEventListener('click', closeOverlay);
 languageBtn.addEventListener('click', showLanguagePage);
 locateBtn.addEventListener('click', () => {
-  if (locationWatchId !== null || locateBtn.classList.contains('is-active')) {
-    stopLocationTracking();
-    showLocationStatus('瀏覽模式 / Browse mode');
+  if (locateState === 'active') {
+    enterBrowseMode();
+  } else if (locateState === 'anchored' && savedBeacon) {
+    returnToBeacon();
   } else {
     startLocationTracking();
   }
