@@ -42,6 +42,8 @@ const COPY = {
 const languageScreen = document.getElementById('languageScreen');
 const mapScreen = document.getElementById('mapScreen');
 const mapFrame = document.getElementById('mapFrame');
+const mapTransformLayer = document.getElementById('mapTransformLayer');
+const gestureLayer = document.getElementById('gestureLayer');
 const overlay = document.getElementById('overlay');
 const overlayDescription = document.getElementById('overlayDescription');
 const shareBtn = document.getElementById('shareBtn');
@@ -59,7 +61,14 @@ let lastCenteredPosition = null;
 let lastRecenterAt = 0;
 let locationStatusTimer = null;
 
+let mapView = {tx:0, ty:0, scale:1};
+let beaconView = {x:0, y:0};
+let gestureStart = null;
+const activePointers = new Map();
+
 const LOCATION_ZOOM = 18;
+const MIN_GESTURE_SCALE = 0.82;
+const MAX_GESTURE_SCALE = 2.2;
 const RECENTER_DISTANCE_METERS = 25;
 const RECENTER_MIN_INTERVAL_MS = 7000;
 
@@ -139,7 +148,20 @@ function centeredMapUrl(lat, lng) {
   return url.toString();
 }
 
+function resetGestureView() {
+  mapView = {tx:0, ty:0, scale:1};
+  const width = mapScreen.clientWidth || MASTER_WIDTH;
+  const height = mapScreen.clientHeight || window.innerHeight;
+  beaconView = {x:width / 2, y:height / 2};
+  mapTransformLayer.style.transform = 'translate(0px, 0px) scale(1)';
+  locationBeacon.style.left = `${beaconView.x}px`;
+  locationBeacon.style.top = `${beaconView.y}px`;
+  gestureStart = null;
+  activePointers.clear();
+}
+
 function recenterMap(lat, lng) {
+  resetGestureView();
   mapFrame.src = centeredMapUrl(lat, lng);
   lastCenteredPosition = {lat, lng};
   lastRecenterAt = Date.now();
@@ -158,7 +180,7 @@ function handleLocation(position, forceRecenter = false) {
   }
 
   const accuracyText = Number.isFinite(accuracy) ? ` · ±${Math.round(accuracy)}m` : '';
-  showLocationStatus(`定位模式 · 地圖已鎖定 / Follow mode · map locked${accuracyText}`, 2600);
+  showLocationStatus(`定位手勢模式 / Gesture mode${accuracyText}`, 2600);
 }
 
 function handleLocationError(error) {
@@ -218,7 +240,110 @@ function stopLocationTracking() {
   lastRecenterAt = 0;
   locateBtn.classList.remove('is-loading');
   setLocateActive(false);
+  resetGestureView();
 }
+
+function localPoint(clientX, clientY) {
+  const rect = gestureLayer.getBoundingClientRect();
+  const scaleX = gestureLayer.clientWidth / rect.width;
+  const scaleY = gestureLayer.clientHeight / rect.height;
+  return {
+    x: (clientX - rect.left) * scaleX,
+    y: (clientY - rect.top) * scaleY
+  };
+}
+
+function getGestureGeometry() {
+  const points = Array.from(activePointers.values());
+  if (!points.length) return null;
+  if (points.length === 1) {
+    return {center:points[0], distance:0};
+  }
+  const a = points[0];
+  const b = points[1];
+  return {
+    center:{x:(a.x + b.x) / 2, y:(a.y + b.y) / 2},
+    distance:Math.hypot(b.x - a.x, b.y - a.y)
+  };
+}
+
+function beginGesture() {
+  const geometry = getGestureGeometry();
+  if (!geometry) {
+    gestureStart = null;
+    return;
+  }
+  gestureStart = {
+    center:geometry.center,
+    distance:geometry.distance,
+    tx:mapView.tx,
+    ty:mapView.ty,
+    scale:mapView.scale,
+    beaconX:beaconView.x,
+    beaconY:beaconView.y
+  };
+}
+
+function updateGesture() {
+  if (!gestureStart) return;
+  const geometry = getGestureGeometry();
+  if (!geometry) return;
+
+  let ratio = 1;
+  if (gestureStart.distance > 0 && geometry.distance > 0) {
+    ratio = geometry.distance / gestureStart.distance;
+  }
+
+  const nextScale = Math.min(
+    MAX_GESTURE_SCALE,
+    Math.max(MIN_GESTURE_SCALE, gestureStart.scale * ratio)
+  );
+  const effectiveRatio = nextScale / gestureStart.scale;
+  const c0 = gestureStart.center;
+  const c1 = geometry.center;
+
+  mapView = {
+    scale:nextScale,
+    tx:c1.x + effectiveRatio * (gestureStart.tx - c0.x),
+    ty:c1.y + effectiveRatio * (gestureStart.ty - c0.y)
+  };
+
+  beaconView = {
+    x:c1.x + effectiveRatio * (gestureStart.beaconX - c0.x),
+    y:c1.y + effectiveRatio * (gestureStart.beaconY - c0.y)
+  };
+
+  mapTransformLayer.style.transform =
+    `translate(${mapView.tx}px, ${mapView.ty}px) scale(${mapView.scale})`;
+  locationBeacon.style.left = `${beaconView.x}px`;
+  locationBeacon.style.top = `${beaconView.y}px`;
+}
+
+gestureLayer.addEventListener('pointerdown', event => {
+  if (!mapScreen.classList.contains('is-following')) return;
+  event.preventDefault();
+  try { gestureLayer.setPointerCapture(event.pointerId); } catch (_) {}
+  activePointers.set(event.pointerId, localPoint(event.clientX, event.clientY));
+  beginGesture();
+});
+
+gestureLayer.addEventListener('pointermove', event => {
+  if (!activePointers.has(event.pointerId)) return;
+  event.preventDefault();
+  activePointers.set(event.pointerId, localPoint(event.clientX, event.clientY));
+  updateGesture();
+});
+
+function endPointer(event) {
+  if (!activePointers.has(event.pointerId)) return;
+  event.preventDefault();
+  activePointers.delete(event.pointerId);
+  if (activePointers.size) beginGesture();
+  else gestureStart = null;
+}
+
+gestureLayer.addEventListener('pointerup', endPointer);
+gestureLayer.addEventListener('pointercancel', endPointer);
 
 const MASTER_WIDTH = 390;
 const PHONE_BREAKPOINT = 600;
