@@ -114,8 +114,9 @@ function showLocationStatus(message, duration = 2200) {
 function setLocateActive(active) {
   locateBtn.classList.toggle('is-active', active);
   locateBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
-  locateLabel.textContent = active ? '停止定位 / Stop' : '我的位置 / Locate Me';
+  locateLabel.textContent = active ? '瀏覽地圖 / Browse Map' : '我的位置 / Locate Me';
   locationBeacon.classList.toggle('is-visible', active);
+  mapScreen.classList.toggle('is-following', active);
 }
 
 function distanceMeters(a, b) {
@@ -157,7 +158,7 @@ function handleLocation(position, forceRecenter = false) {
   }
 
   const accuracyText = Number.isFinite(accuracy) ? ` · ±${Math.round(accuracy)}m` : '';
-  showLocationStatus(`定位中 / Located${accuracyText}`);
+  showLocationStatus(`定位模式 · 地圖已鎖定 / Follow mode · map locked${accuracyText}`, 2600);
 }
 
 function handleLocationError(error) {
@@ -252,7 +253,7 @@ languageBtn.addEventListener('click', showLanguagePage);
 locateBtn.addEventListener('click', () => {
   if (locationWatchId !== null || locateBtn.classList.contains('is-active')) {
     stopLocationTracking();
-    showLocationStatus('已停止定位 / Location stopped');
+    showLocationStatus('瀏覽模式 / Browse mode');
   } else {
     startLocationTracking();
   }
