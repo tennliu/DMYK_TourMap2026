@@ -20,7 +20,7 @@ body{overflow-x:hidden;overflow-y:auto;-webkit-overflow-scrolling:touch}
 .lang-btn img{display:block;width:100%;height:100%}.lang-btn:active{transform:scale(.95);filter:brightness(.92)}
 .lang-cn{left:143.76px;top:0}.lang-jp{left:85.5px;top:99px}.lang-en{left:202px;top:99px}.lang-kr{left:143.76px;top:198px}.lang-th{left:85.5px;top:297px}.lang-vi{left:202px;top:297px}.lang-id{left:143.76px;top:396px}
 .map-transform-layer{position:absolute;inset:0;z-index:1;transform-origin:0 0;will-change:transform}
-.map-transform-layer iframe{position:absolute;left:-160px;top:-160px;width:calc(100% + 320px);height:calc(100% + 320px);border:0;background:#eee;pointer-events:auto}
+.map-transform-layer iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#eee;pointer-events:auto}
 .map-screen.is-following .map-transform-layer iframe{pointer-events:none}
 .gesture-layer{position:absolute;inset:0;z-index:6;display:none;touch-action:none;-webkit-user-select:none;user-select:none;background:transparent}
 .map-screen.is-following .gesture-layer{display:block}
