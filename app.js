@@ -42,6 +42,8 @@ const COPY = {
 const languageScreen = document.getElementById('languageScreen');
 const mapScreen = document.getElementById('mapScreen');
 const mapFrame = document.getElementById('mapFrame');
+const locationPeekLayer = document.getElementById('locationPeekLayer');
+const locationPeekFrame = document.getElementById('locationPeekFrame');
 const overlay = document.getElementById('overlay');
 const overlayDescription = document.getElementById('overlayDescription');
 const shareBtn = document.getElementById('shareBtn');
@@ -54,16 +56,16 @@ const locationBeacon = document.getElementById('locationBeacon');
 const locationStatus = document.getElementById('locationStatus');
 
 let currentLang = 'zh';
-let locationWatchId = null;
-let lastCenteredPosition = null;
-let lastRecenterAt = 0;
 let locationStatusTimer = null;
-let savedBeacon = null;
-let locateState = 'idle';
+let locationPeekTimer = null;
+let locationPeekCleanupTimer = null;
+let locationPeekLoadTimer = null;
+let locationPeekActive = false;
+let locationPeekToken = 0;
 
 const LOCATION_ZOOM = 18;
-const RECENTER_DISTANCE_METERS = 25;
-const RECENTER_MIN_INTERVAL_MS = 7000;
+const LOCATION_HOLD_MS = 2000;
+const LOCATION_RETURN_MS = 720;
 
 function applyOverlayCopy(lang) {
   const c = COPY[lang] || COPY.en;
@@ -74,7 +76,7 @@ function applyOverlayCopy(lang) {
 }
 
 function openMap(lang) {
-  resetLocationAnchor();
+  cancelLocationPeek(true);
   currentLang = lang;
   applyOverlayCopy(lang);
   mapFrame.src = MAPS[lang];
@@ -85,7 +87,7 @@ function openMap(lang) {
 }
 
 function showLanguagePage() {
-  resetLocationAnchor();
+  cancelLocationPeek(true);
   closeOverlay();
   mapFrame.src = '';
   mapScreen.classList.add('is-hidden');
@@ -113,35 +115,23 @@ function showLocationStatus(message, duration = 2200) {
   }
 }
 
-function setLocateState(state) {
-  locateState = state;
-  const active = state === 'active';
-  const anchored = state === 'anchored';
+function setLocateButton(mode = 'idle') {
+  const loading = mode === 'loading';
+  const active = mode === 'active';
+  const returning = mode === 'returning';
 
-  locateBtn.classList.toggle('is-active', active);
-  locateBtn.classList.toggle('has-anchor', anchored);
+  locateBtn.classList.toggle('is-loading', loading);
+  locateBtn.classList.toggle('is-active', active || returning);
+  locateBtn.disabled = loading || active || returning;
   locateBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
-  locateLabel.textContent = active
-    ? '瀏覽地圖 / Browse Map'
-    : anchored
-      ? '回到定位點 / Return to Beacon'
-      : '我的位置 / Locate Me';
 
-  locationBeacon.classList.toggle('is-visible', active);
-  mapScreen.classList.toggle('is-following', active);
-}
-
-function distanceMeters(a, b) {
-  if (!a || !b) return Infinity;
-  const R = 6371000;
-  const toRad = value => value * Math.PI / 180;
-  const dLat = toRad(b.lat - a.lat);
-  const dLng = toRad(b.lng - a.lng);
-  const lat1 = toRad(a.lat);
-  const lat2 = toRad(b.lat);
-  const h = Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
-  return 2 * R * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+  locateLabel.textContent = loading
+    ? '定位中 / Locating…'
+    : active
+      ? '我的位置 / You are here'
+      : returning
+        ? '返回中 / Returning…'
+        : '我的位置 / Locate Me';
 }
 
 function centeredMapUrl(lat, lng) {
@@ -151,28 +141,101 @@ function centeredMapUrl(lat, lng) {
   return url.toString();
 }
 
-function recenterMap(lat, lng) {
-  mapFrame.src = centeredMapUrl(lat, lng);
-  lastCenteredPosition = {lat, lng};
-  lastRecenterAt = Date.now();
+function clearLocationPeekTimers() {
+  clearTimeout(locationPeekTimer);
+  clearTimeout(locationPeekCleanupTimer);
+  clearTimeout(locationPeekLoadTimer);
+  locationPeekTimer = null;
+  locationPeekCleanupTimer = null;
+  locationPeekLoadTimer = null;
 }
 
-function handleLocation(position) {
-  const {latitude: lat, longitude: lng, accuracy} = position.coords;
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+function cancelLocationPeek(clearFrame = false) {
+  locationPeekToken += 1;
+  locationPeekActive = false;
+  clearLocationPeekTimers();
 
-  savedBeacon = {lat, lng, accuracy};
-  recenterMap(lat, lng);
-  setLocateState('active');
+  mapScreen.classList.remove('is-peeking');
+  locationPeekLayer.classList.remove('is-visible');
+  locationPeekLayer.setAttribute('aria-hidden','true');
+  locationBeacon.classList.remove('is-visible');
+  setLocateButton('idle');
 
+  if (clearFrame) locationPeekFrame.src = '';
+}
+
+function finishLocationPeek(token) {
+  if (!locationPeekActive || token !== locationPeekToken) return;
+
+  locationBeacon.classList.remove('is-visible');
+  setLocateButton('returning');
+  mapScreen.classList.remove('is-peeking');
+  locationPeekLayer.classList.remove('is-visible');
+
+  locationPeekCleanupTimer = setTimeout(() => {
+    if (token !== locationPeekToken) return;
+    locationPeekActive = false;
+    locationPeekLayer.setAttribute('aria-hidden','true');
+    locationPeekFrame.src = '';
+    setLocateButton('idle');
+    showLocationStatus('已回到原本瀏覽位置 / Back to previous map view', 1800);
+  }, LOCATION_RETURN_MS);
+}
+
+function revealLocationPeek(position, token) {
+  if (token !== locationPeekToken || !locationPeekActive) return;
+
+  clearTimeout(locationPeekLoadTimer);
+  locateBtn.classList.remove('is-loading');
+  setLocateButton('active');
+
+  locationPeekLayer.classList.add('is-visible');
+  mapScreen.classList.add('is-peeking');
+
+  requestAnimationFrame(() => {
+    if (token !== locationPeekToken) return;
+    locationBeacon.classList.add('is-visible');
+  });
+
+  const accuracy = position.coords.accuracy;
   const accuracyText = Number.isFinite(accuracy) ? ` · ±${Math.round(accuracy)}m` : '';
-  showLocationStatus(`定位點已建立 / Beacon anchored${accuracyText}`, 2600);
+  showLocationStatus(`我的位置 / You are here${accuracyText}`, 1800);
+
+  locationPeekTimer = setTimeout(() => finishLocationPeek(token), LOCATION_HOLD_MS);
+}
+
+function beginLocationPeek(position) {
+  const {latitude: lat, longitude: lng} = position.coords;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    setLocateButton('idle');
+    showLocationStatus('無法取得位置 / Unable to locate', 3000);
+    return;
+  }
+
+  clearLocationPeekTimers();
+  locationPeekActive = true;
+  const token = ++locationPeekToken;
+  let revealed = false;
+
+  locationPeekLayer.setAttribute('aria-hidden','false');
+  locationPeekFrame.src = centeredMapUrl(lat, lng);
+
+  const revealOnce = () => {
+    if (revealed || token !== locationPeekToken) return;
+    revealed = true;
+    revealLocationPeek(position, token);
+  };
+
+  locationPeekFrame.addEventListener('load', revealOnce, {once:true});
+  locationPeekLoadTimer = setTimeout(revealOnce, 1600);
 }
 
 function handleLocationError(error) {
+  locationPeekActive = false;
+  setLocateButton('idle');
+
   if (error && error.code === 1) {
     showLocationStatus('未允許位置權限 / Location permission denied', 3600);
-    resetLocationAnchor();
     return;
   }
   if (error && error.code === 2) {
@@ -180,65 +243,29 @@ function handleLocationError(error) {
     return;
   }
   if (error && error.code === 3) {
-    showLocationStatus('定位逾時，持續嘗試中 / Location timed out', 3200);
+    showLocationStatus('定位逾時 / Location timed out', 3200);
     return;
   }
   showLocationStatus('無法取得位置 / Unable to locate', 3200);
 }
 
-function startLocationTracking() {
+function startLocationPeek() {
+  if (locationPeekActive) return;
   if (!navigator.geolocation) {
     showLocationStatus('此瀏覽器不支援定位 / Geolocation unavailable', 3600);
     return;
   }
 
-  locateBtn.classList.add('is-loading');
-  locateLabel.textContent = '定位中 / Locating…';
+  // The current base iframe is intentionally left untouched. Its live pan/zoom
+  // state is the returning anchor for this location peek.
+  setLocateButton('loading');
+  showLocationStatus('正在取得位置 / Locating…', 0);
 
   navigator.geolocation.getCurrentPosition(
-    position => {
-      locateBtn.classList.remove('is-loading');
-      handleLocation(position);
-    },
-    error => {
-      locateBtn.classList.remove('is-loading');
-      setLocateState(savedBeacon ? 'anchored' : 'idle');
-      handleLocationError(error);
-    },
+    position => beginLocationPeek(position),
+    handleLocationError,
     {enableHighAccuracy:true, maximumAge:0, timeout:12000}
   );
-}
-
-function clearLocationWatch() {
-  if (locationWatchId !== null && navigator.geolocation) {
-    navigator.geolocation.clearWatch(locationWatchId);
-  }
-  locationWatchId = null;
-  lastCenteredPosition = null;
-  lastRecenterAt = 0;
-  locateBtn.classList.remove('is-loading');
-}
-
-function enterBrowseMode() {
-  clearLocationWatch();
-  setLocateState(savedBeacon ? 'anchored' : 'idle');
-  showLocationStatus('瀏覽模式 · 定位點已保存 / Browse mode · beacon saved', 2600);
-}
-
-function returnToBeacon() {
-  if (!savedBeacon) {
-    startLocationTracking();
-    return;
-  }
-  recenterMap(savedBeacon.lat, savedBeacon.lng);
-  setLocateState('active');
-  showLocationStatus('已回到定位點 / Returned to beacon', 2200);
-}
-
-function resetLocationAnchor() {
-  clearLocationWatch();
-  savedBeacon = null;
-  setLocateState('idle');
 }
 
 const MASTER_WIDTH = 390;
@@ -271,15 +298,7 @@ document.querySelectorAll('.lang-btn').forEach(btn => {
 sideBtn.addEventListener('click', openOverlay);
 closeBtn.addEventListener('click', closeOverlay);
 languageBtn.addEventListener('click', showLanguagePage);
-locateBtn.addEventListener('click', () => {
-  if (locateState === 'active') {
-    enterBrowseMode();
-  } else if (locateState === 'anchored' && savedBeacon) {
-    returnToBeacon();
-  } else {
-    startLocationTracking();
-  }
-});
+locateBtn.addEventListener('click', startLocationPeek);
 overlay.addEventListener('click', e => { if (e.target === overlay) closeOverlay(); });
 
 shareBtn.addEventListener('click', async () => {
